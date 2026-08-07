@@ -1,6 +1,6 @@
 # DS Intern Hiring — Summer 2027
 
-A multi-round data engineering exercise. Rounds are released one at a time — only work on the round(s) currently present in this repo.
+A multi-round data manipulation exercise. Rounds are released one at a time — only work on the round(s) currently present in this repo.
 
 ## Getting started
 
