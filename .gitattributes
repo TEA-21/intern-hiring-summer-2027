@@ -1,2 +1,2 @@
-data/raw/*.jsonl filter=lfs diff=lfs merge=lfs -text
-data/raw/*.parquet filter=lfs diff=lfs merge=lfs -text
+round1/data/raw/*.jsonl filter=lfs diff=lfs merge=lfs -text
+round1/data/raw/*.parquet filter=lfs diff=lfs merge=lfs -text

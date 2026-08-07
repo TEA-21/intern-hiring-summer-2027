@@ -1,12 +1,14 @@
 # DS Intern Hiring — Summer 2027
 
-Round 1 of a multi-round data engineering exercise.
+A multi-round data engineering exercise. Rounds are released one at a time — only work on the round(s) currently present in this repo.
 
 ## Getting started
 
-1. Read `PROBLEM_STATEMENT.md`.
-2. Read `GUIDELINES.md` for how we'll evaluate you and what's expected.
-3. Data is in `data/raw/`.
+Each round has its own folder (`round1/`, `round2/`, ...):
+
+1. Read that round's `PROBLEM_STATEMENT.md`.
+2. Read `GUIDELINES.md` for how we'll evaluate you and what's expected (same for every round).
+3. Round 1's data is in `round1/data/raw/`. Later rounds build on your own output from earlier rounds — no new data files.
 
 This repo uses [Git LFS](https://git-lfs.com/) for the larger data files. After cloning:
 
