@@ -1,0 +1,9 @@
+This file is not plain text.
+
+It was produced by a three-stage transform. Each stage is a
+standard, widely-used encoding — no secret key is involved.
+Inspect the first few bytes to identify the outermost layer,
+then work inwards.
+
+Once decoded you will have 179,494 records with fields:
+  vehicle_id, timestamp, fuel_level_pct, oil_life_pct, odometer_mi
