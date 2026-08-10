@@ -1,0 +1,14 @@
+{
+  "threshold_accel": 0.3,
+  "threshold_brake": -0.3,
+  "threshold_corner": 0.3,
+  "total_events": 54022,
+  "hard_accel_count": 12681,
+  "hard_brake_count": 13030,
+  "hard_corner_count": 28311,
+  "median_duration": 0.0,
+  "p95_duration": 8.0,
+  "start_speed_available_pct": 12.335715079041872,
+  "end_speed_available_pct": 12.18762726296694,
+  "distance_available_pct": 0.0
+}

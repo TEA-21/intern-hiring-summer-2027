@@ -1,0 +1,28 @@
+{
+  "original_rows": 11220689,
+  "resampled_rows": 1060295,
+  "compression_ratio": 10.58,
+  "per_parameter_null_pct": {
+    "make": 99.98,
+    "model": 99.98,
+    "model_year": 99.98,
+    "speed_mph": 99.49,
+    "engine_rpm": 99.49,
+    "gear_position": 98.72,
+    "ignition_status": 94.64,
+    "acceleration_long_g": 99.68,
+    "acceleration_lat_g": 99.68,
+    "fuel_level_pct": 16.9,
+    "oil_life_pct": 16.89,
+    "odometer_mi": 16.9
+  },
+  "per_vehicle_ticks": {
+    "min": 33,
+    "max": 35215,
+    "mean": 14726.3,
+    "median": 13128.0,
+    "outlier_count": 0
+  },
+  "ticks_dropped": 3296569,
+  "ticks_total": 4356864
+}
