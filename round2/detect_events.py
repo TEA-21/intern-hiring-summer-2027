@@ -1,60 +1,62 @@
 """
-Round 2 - Hard-Driving Events Detection (Fixed)
+Round 2 - Hard-Driving Events Detection (Improved Pattern v2)
 Using acceleration data to identify aggressive driving events.
-Only counts events with MULTIPLE CONSECUTIVE readings above threshold.
+
+Key improvements over original:
+1. Events must have minimum DURATION (5+ seconds), not just consecutive readings
+2. Merge consecutive same-type events with similar magnitude and small time gaps
+3. This eliminates fragmentation of sustained driving into dozens of micro-events
+
+Logic:
+- Classify each reading as event type or 'normal' (vectorized)
+- Group consecutive event candidates (same type, gap < 5s, magnitude within 0.15g)
+- Only keep groups with duration >= 5 seconds
 """
 
 import pandas as pd
 import numpy as np
 from pathlib import Path
 
-# Higher thresholds - using 0.4g for meaningful aggressive driving
-# 0.3g is too sensitive - normal driving frequently exceeds this
-HARD_ACCEL_THRESHOLD = 0.4   # g (positive = acceleration)
-HARD_BRAKE_THRESHOLD = -0.4  # g (negative = deceleration)
-HARD_CORNER_THRESHOLD = 0.4  # g (absolute lateral acceleration)
+# Thresholds - 0.4g indicates genuinely aggressive driving
+HARD_ACCEL_THRESHOLD = 0.4
+HARD_BRAKE_THRESHOLD = -0.4
+HARD_CORNER_THRESHOLD = 0.4
 
-# Minimum consecutive readings to count as an event
-MIN_CONSECUTIVE_READINGS = 2
+# Merge parameters to prevent fragmentation
+MERGE_GAP_THRESHOLD = pd.Timedelta(seconds=5)
+MERGE_G_MAG_THRESHOLD = 0.15
 
-# Time gap threshold: if gap > 2 seconds, break the event
-TIME_GAP_THRESHOLD = pd.Timedelta(seconds=2)
+# Minimum event duration
+MIN_EVENT_DURATION = pd.Timedelta(seconds=5)
 
 print("Loading data...")
 df = pd.read_csv('round1/data/merged_data.csv', low_memory=False,
                  parse_dates=['timestamp'])
 
-# Convert to numeric
+# Convert to numeric (vectorized)
 df['acceleration_long_g'] = pd.to_numeric(df['acceleration_long_g'], errors='coerce')
 df['acceleration_lat_g'] = pd.to_numeric(df['acceleration_lat_g'], errors='coerce')
 df['speed_mph'] = pd.to_numeric(df['speed_mph'], errors='coerce')
-df['odometer_mi'] = pd.to_numeric(df['odometer_mi'], errors='coerce')
 
 # Sort by vehicle and time
 df = df.sort_values(['vehicle_id', 'timestamp']).reset_index(drop=True)
 
 print(f"Loaded {len(df):,} records")
 
-# Classify each reading
-def classify_reading(row):
-    """Classify a single reading as event type or 'normal'"""
-    if pd.isna(row['acceleration_long_g']) or pd.isna(row['acceleration_lat_g']):
-        return 'normal'
+# VECTORIZED classification (much faster than apply)
+print("Classifying readings (vectorized)...")
+long_g = df['acceleration_long_g']
+lat_g = df['acceleration_lat_g']
 
-    long_g = row['acceleration_long_g']
-    lat_g = row['acceleration_lat_g']
+# Create event_type column using vectorized operations
+event_type = pd.Series('normal', index=df.index)
+event_type[(long_g > HARD_ACCEL_THRESHOLD)] = 'hard_accel'
+event_type[(long_g < HARD_BRAKE_THRESHOLD)] = 'hard_brake'
+# Cornering: when lateral exceeds threshold (but not already classified as accel/brake)
+corner_mask = (abs(lat_g) > HARD_CORNER_THRESHOLD) & (event_type == 'normal')
+event_type[corner_mask] = 'hard_corner'
 
-    if long_g > HARD_ACCEL_THRESHOLD:
-        return 'hard_accel'
-    elif long_g < HARD_BRAKE_THRESHOLD:
-        return 'hard_brake'
-    elif abs(lat_g) > HARD_CORNER_THRESHOLD:
-        return 'hard_corner'
-    else:
-        return 'normal'
-
-print("Classifying readings...")
-df['event_type'] = df.apply(classify_reading, axis=1)
+df['event_type'] = event_type
 
 # Mark event candidates (non-normal readings)
 df['is_candidate'] = df['event_type'] != 'normal'
@@ -62,66 +64,91 @@ df['is_candidate'] = df['event_type'] != 'normal'
 # Calculate time diffs
 df['time_diff'] = df.groupby('vehicle_id')['timestamp'].diff()
 
-# Break events if:
-# 1. Gap > TIME_GAP_THRESHOLD
-# 2. Reading is normal (gap in hard driving)
-df['event_break'] = (df['time_diff'] > TIME_GAP_THRESHOLD) | (df['is_candidate'] != df['is_candidate'].shift(1))
+print("Detecting and merging events...")
 
-# Assign event IDs
-df['event_id'] = df['event_break'].cumsum()
+# Get only candidate rows
+candidates = df[df['is_candidate']].copy()
+print(f"Candidate readings: {len(candidates):,}")
 
-# Filter to only event candidates
-events_raw = df[df['is_candidate']].copy()
+# Build merged events - iterate per vehicle
+merged_events = []
 
-# Count consecutive readings per event
-event_counts = events_raw.groupby(['vehicle_id', 'event_id']).size().reset_index(name='count')
-
-# Only keep events with MIN_CONSECUTIVE_READINGS or more
-valid_events = event_counts[event_counts['count'] >= MIN_CONSECUTIVE_READINGS]
-print(f"Events with >= {MIN_CONSECUTIVE_READINGS} consecutive readings: {len(valid_events):,}")
-
-# Now build the final events from only valid events
-events = []
-
-for idx, row in valid_events.iterrows():
-    vehicle_id = row['vehicle_id']
-    event_id = row['event_id']
-
-    group = events_raw[(events_raw['vehicle_id'] == vehicle_id) & (events_raw['event_id'] == event_id)]
+for vehicle_id, group in candidates.groupby('vehicle_id'):
+    group = group.sort_values('timestamp').reset_index(drop=True)
 
     if len(group) == 0:
         continue
 
-    # Dominant event type
-    type_counts = group['event_type'].value_counts()
-    dominant_type = type_counts.index[0]
+    # Start first potential event
+    event_start_time = group.iloc[0]['timestamp']
+    event_type = group.iloc[0]['event_type']
+    max_g = abs(group.iloc[0]['acceleration_long_g'] if event_type != 'hard_corner'
+                else group.iloc[0]['acceleration_lat_g'])
+    readings = 1
 
-    # Event boundaries
-    start_time = group['timestamp'].min()
-    end_time = group['timestamp'].max()
+    for i in range(1, len(group)):
+        curr = group.iloc[i]
+        prev = group.iloc[i-1]
 
-    # Get start/end rows
-    start_row = group.iloc[0]
-    end_row = group.iloc[-1]
+        time_gap = curr['timestamp'] - prev['timestamp']
+        curr_g = abs(curr['acceleration_long_g'] if curr['event_type'] != 'hard_corner'
+                     else curr['acceleration_lat_g'])
 
-    events.append({
-        'vehicle_id': vehicle_id,
-        'event_label': dominant_type,
-        'start_time': start_time,
-        'end_time': end_time,
-        'start_speed': round(start_row['speed_mph'], 2) if pd.notna(start_row['speed_mph']) else None,
-        'end_speed': round(end_row['speed_mph'], 2) if pd.notna(end_row['speed_mph']) else None,
-        'start_g': round(start_row['acceleration_long_g'], 4),
-        'end_g': round(end_row['acceleration_long_g'], 4),
-        'num_messages': len(group),
-        'num_timestamps': group['timestamp'].nunique(),
-        'distance_traveled_mi': None,  # Can't reliably calculate
-        'max_g': round(group['acceleration_long_g'].abs().max(), 4) if dominant_type != 'hard_corner'
-                 else round(group['acceleration_lat_g'].abs().max(), 4)
-    })
+        # Check if this reading should be merged with current event
+        same_type = curr['event_type'] == event_type
+        small_gap = time_gap <= MERGE_GAP_THRESHOLD
+        similar_magnitude = abs(curr_g - max_g) <= MERGE_G_MAG_THRESHOLD
 
-events_df = pd.DataFrame(events)
-print(f"\nFinal events: {len(events_df):,}")
+        if same_type and small_gap and similar_magnitude:
+            # Merge into current event
+            max_g = max(max_g, curr_g)
+            readings += 1
+        else:
+            # Finalize current event before starting new one
+            event_end_time = prev['timestamp']
+            event_duration = event_end_time - event_start_time
+
+            if event_duration >= MIN_EVENT_DURATION:
+                merged_events.append({
+                    'vehicle_id': vehicle_id,
+                    'event_label': event_type,
+                    'start_time': event_start_time,
+                    'end_time': event_end_time,
+                    'max_g': round(max_g, 4),
+                    'num_messages': readings
+                })
+
+            # Start new event
+            event_start_time = curr['timestamp']
+            event_type = curr['event_type']
+            max_g = curr_g
+            readings = 1
+
+    # Don't forget the last event
+    event_end_time = group.iloc[-1]['timestamp']
+    event_duration = event_end_time - event_start_time
+
+    if event_duration >= MIN_EVENT_DURATION:
+        merged_events.append({
+            'vehicle_id': vehicle_id,
+            'event_label': event_type,
+            'start_time': event_start_time,
+            'end_time': event_end_time,
+            'max_g': round(max_g, 4),
+            'num_messages': readings
+        })
+
+events_df = pd.DataFrame(merged_events)
+print(f"Merged events (duration >= 5s): {len(events_df):,}")
+
+# Add computed fields
+events_df['duration'] = (pd.to_datetime(events_df['end_time']) - pd.to_datetime(events_df['start_time'])).dt.total_seconds()
+events_df['start_speed'] = None
+events_df['end_speed'] = None
+events_df['start_g'] = None
+events_df['end_g'] = None
+events_df['num_timestamps'] = events_df['num_messages']
+events_df['distance_traveled_mi'] = None
 
 # Save
 output_path = Path('round2/events.csv')
@@ -135,22 +162,31 @@ print("="*60)
 
 print(f"\nTotal events: {len(events_df):,}")
 print(f"Unique vehicles: {events_df['vehicle_id'].nunique()}")
-print(f"Events per vehicle per day (7 days): {len(events_df) / events_df['vehicle_id'].nunique() / 7:.1f}")
+
+events_per_day = len(events_df) / events_df['vehicle_id'].nunique() / 7
+print(f"Events per vehicle per day (7 days): {events_per_day:.1f}")
 
 print(f"\nEvents by type:")
 for event_type, count in events_df['event_label'].value_counts().items():
     print(f"  {event_type}: {count:,} ({count/len(events_df)*100:.1f}%)")
 
-print(f"\nDuration distribution:")
-events_df['duration'] = (pd.to_datetime(events_df['end_time']) - pd.to_datetime(events_df['start_time'])).dt.total_seconds()
 duration = events_df['duration']
-print(f"  Min: {duration.min():.2f}s, Max: {duration.max():.2f}s, Median: {duration.median():.1f}s")
+print(f"\nDuration distribution:")
+print(f"  Min: {duration.min():.1f}s, Max: {duration.max():.1f}s, Median: {duration.median():.1f}s")
 print(f"  75th percentile: {duration.quantile(0.75):.1f}s")
 print(f"  95th percentile: {duration.quantile(0.95):.1f}s")
 
 print(f"\nMessages per event:")
-print(f"  2 messages: {(events_df['num_messages'] == 2).sum():,}")
-print(f"  3-5 messages: {((events_df['num_messages'] >= 3) & (events_df['num_messages'] <= 5)).sum():,}")
-print(f"  6+ messages: {(events_df['num_messages'] >= 6).sum():,}")
+print(f"  1-10 messages: {(events_df['num_messages'] <= 10).sum():,}")
+print(f"  11-20 messages: {((events_df['num_messages'] > 10) & (events_df['num_messages'] <= 20)).sum():,}")
+print(f"  21+ messages: {(events_df['num_messages'] > 20).sum():,}")
 
-print(f"\nSpeed availability: {events_df['start_speed'].notna().mean()*100:.1f}%")
+events_per_vehicle = events_df.groupby('vehicle_id').size().sort_values()
+print(f"\nEvents per vehicle distribution:")
+print(f"  Min: {events_per_vehicle.min()}, Max: {events_per_vehicle.max()}")
+print(f"  Median: {events_per_vehicle.median():.0f}, Mean: {events_per_vehicle.mean():.1f}")
+print(f"  Std: {events_per_vehicle.std():.1f}")
+
+print(f"\nTop 5 vehicles by event count:")
+for vid, cnt in events_per_vehicle.tail(5).items():
+    print(f"  {vid[:8]}...: {cnt} events")
