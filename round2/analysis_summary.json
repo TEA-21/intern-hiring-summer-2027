@@ -1,14 +1,13 @@
 {
-  "threshold_accel": 0.3,
-  "threshold_brake": -0.3,
-  "threshold_corner": 0.3,
-  "total_events": 54022,
-  "hard_accel_count": 12681,
-  "hard_brake_count": 13030,
-  "hard_corner_count": 28311,
-  "median_duration": 0.0,
-  "p95_duration": 8.0,
-  "start_speed_available_pct": 12.335715079041872,
-  "end_speed_available_pct": 12.18762726296694,
-  "distance_available_pct": 0.0
+  "threshold_accel": 0.4,
+  "threshold_brake": -0.4,
+  "threshold_corner": 0.4,
+  "min_consecutive_readings": 2,
+  "total_events": 4284,
+  "hard_accel_count": 1859,
+  "hard_brake_count": 813,
+  "hard_corner_count": 1612,
+  "median_duration": 2.0,
+  "p95_duration": 19.955599999999972,
+  "events_per_vehicle_per_day": 9.1
 }
