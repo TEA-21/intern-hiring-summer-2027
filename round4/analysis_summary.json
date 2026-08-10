@@ -1,13 +1,13 @@
 {
   "round3_rows": 1060256,
-  "round4_rows": 1061040,
-  "extra_rows": 784,
-  "off_grid_rows": 784,
+  "round4_rows": 1062486,
+  "extra_rows": 2230,
+  "off_grid_rows": 2230,
   "trigger_dist": {
-    "scheduled": 1038468,
-    "gear_change": 17223,
-    "ignition_change": 4565,
-    "event_start": 394,
-    "event_end": 390
+    "scheduled": 1060256,
+    "ignition_change": 1251,
+    "event_start": 390,
+    "event_end": 388,
+    "gear_change": 201
   }
 }

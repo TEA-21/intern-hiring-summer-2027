@@ -1,5 +1,6 @@
 """
-Round 4 - Advanced Resampling (Per-Vehicle Processing)
+Round 4 - Advanced Resampling
+Detect ignition/gear changes from RAW data (not resampled).
 """
 
 import pandas as pd
@@ -10,6 +11,7 @@ print("Loading data...")
 
 # Load Round 3 resampled data
 resampled = pd.read_csv('round3/resampled_data.csv', low_memory=False)
+resampled['tick_time'] = pd.to_datetime(resampled['tick_time'])
 print(f"Round 3 rows: {len(resampled):,}")
 
 # Load Round 2 events
@@ -18,7 +20,7 @@ events['start_time'] = pd.to_datetime(events['start_time'])
 events['end_time'] = pd.to_datetime(events['end_time'])
 print(f"Events: {len(events):,}")
 
-# Load raw data for off-grid value lookup
+# Load raw data
 raw = pd.read_csv('round1/data/merged_data.csv', low_memory=False)
 raw['timestamp'] = pd.to_datetime(raw['timestamp'], errors='coerce')
 numeric_cols = ['speed_mph', 'engine_rpm', 'acceleration_long_g', 'acceleration_lat_g',
@@ -29,27 +31,32 @@ raw = raw[(raw['timestamp'].dt.year >= 2020) & (raw['timestamp'].dt.year <= 2030
 raw = raw.sort_values(['vehicle_id', 'timestamp']).reset_index(drop=True)
 print(f"Raw data rows: {len(raw):,}")
 
-print("\n--- Identifying Triggers ---")
+print("\n--- Identifying Triggers from RAW data ---")
 
-resampled['tick_time'] = pd.to_datetime(resampled['tick_time'])
-resampled = resampled.sort_values(['vehicle_id', 'tick_time']).reset_index(drop=True)
-
-# Function to find changes in a column
-def find_changes(df, col):
+# Function to find changes in a column from raw data
+def find_changes_from_raw(df, col):
     df = df.copy()
     df['prev'] = df.groupby('vehicle_id')[col].shift(1)
-    changes = df[(df[col] != df['prev']) & df[col].notna() & df['prev'].notna()].copy()
-    return changes[['vehicle_id', 'tick_time']]
+    changes = df[
+        (df[col] != df['prev']) &
+        df[col].notna() &
+        df['prev'].notna()
+    ].copy()
+    return changes[['vehicle_id', 'timestamp', col]]
 
-# 1. Ignition changes
-ignition_changes = find_changes(resampled, 'ignition_status')
+# 1. Ignition changes (from raw data)
+print("Detecting ignition changes from raw...")
+ignition_changes = find_changes_from_raw(raw, 'ignition_status')
+ignition_changes = ignition_changes.rename(columns={'timestamp': 'tick_time', 'ignition_status': 'new_ignition'})
 ignition_changes['trigger_type'] = 'ignition_change'
-print(f"Ignition changes: {len(ignition_changes):,}")
+print(f"  Ignition changes in raw: {len(ignition_changes):,}")
 
-# 2. Gear changes
-gear_changes = find_changes(resampled, 'gear_position')
+# 2. Gear changes (from raw data)
+print("Detecting gear changes from raw...")
+gear_changes = find_changes_from_raw(raw, 'gear_position')
+gear_changes = gear_changes.rename(columns={'timestamp': 'tick_time', 'gear_position': 'new_gear'})
 gear_changes['trigger_type'] = 'gear_change'
-print(f"Gear changes: {len(gear_changes):,}")
+print(f"  Gear changes in raw: {len(gear_changes):,}")
 
 # 3. Event starts/ends
 event_starts = events[['vehicle_id', 'start_time']].copy()
@@ -60,10 +67,17 @@ event_ends = events[['vehicle_id', 'end_time']].copy()
 event_ends['trigger_type'] = 'event_end'
 event_ends = event_ends.rename(columns={'end_time': 'tick_time'})
 
-# Combine all triggers
-triggers = pd.concat([ignition_changes, gear_changes, event_starts, event_ends], ignore_index=True)
+# Combine all triggers (only keep vehicle_id and tick_time for deduplication)
+triggers = pd.concat([
+    ignition_changes[['vehicle_id', 'tick_time', 'trigger_type']],
+    gear_changes[['vehicle_id', 'tick_time', 'trigger_type']],
+    event_starts,
+    event_ends
+], ignore_index=True)
+
+# Drop duplicates - keep first occurrence for each (vehicle_id, tick_time)
 triggers = triggers.drop_duplicates(subset=['vehicle_id', 'tick_time'], keep='first')
-print(f"Total triggers: {len(triggers):,}")
+print(f"\nTotal triggers (after dedup): {len(triggers):,}")
 
 # Identify on/off grid
 triggers['second'] = triggers['tick_time'].dt.second
@@ -75,21 +89,37 @@ print("\n--- Processing per vehicle ---")
 
 all_triggered_rows = []
 
+# Create lookup for resampled data
+resampled_dict = {}
+for vehicle_id, group in resampled.groupby('vehicle_id'):
+    group = group.sort_values('tick_time').reset_index(drop=True)
+    resampled_dict[vehicle_id] = group
+
+# Create lookup for raw data
+raw_dict = {}
+for vehicle_id, group in raw.groupby('vehicle_id'):
+    group = group.sort_values('timestamp').reset_index(drop=True)
+    raw_dict[vehicle_id] = group
+
 for vehicle_id, vehicle_triggers in triggers.groupby('vehicle_id'):
-    # Get vehicle's resampled data
-    vehicle_resampled = resampled[resampled['vehicle_id'] == vehicle_id].copy()
-    vehicle_raw = raw[raw['vehicle_id'] == vehicle_id].copy()
+    vehicle_triggers = vehicle_triggers.sort_values('tick_time').reset_index(drop=True)
+    vehicle_resampled = resampled_dict.get(vehicle_id)
+    vehicle_raw = raw_dict.get(vehicle_id)
+
+    if vehicle_raw is None:
+        continue
 
     for _, trigger in vehicle_triggers.iterrows():
         t_time = trigger['tick_time']
         t_type = trigger['trigger_type']
         is_on_grid = trigger['is_on_grid']
 
-        if is_on_grid:
-            # Get values from resampled data
-            tick_row = vehicle_resampled[vehicle_resampled['tick_time'] == t_time]
-            if len(tick_row) > 0:
-                row = tick_row.iloc[0]
+        if is_on_grid and vehicle_resampled is not None:
+            # Get values from resampled data (exact tick match)
+            mask = vehicle_resampled['tick_time'] == t_time
+            tick_rows = vehicle_resampled[mask]
+            if len(tick_rows) > 0:
+                row = tick_rows.iloc[0]
                 all_triggered_rows.append({
                     'vehicle_id': vehicle_id,
                     'timestamp': t_time,
@@ -152,7 +182,6 @@ round3_count = len(resampled)
 extra = len(combined) - round3_count
 print(f"Round 3: {round3_count:,}, Round 4: {len(combined):,}, Extra: {extra:,} ({extra/round3_count*100:.2f}%)")
 
-off_grid = combined[combined['trigger_type'] != 'scheduled']
 combined['ts_dt'] = pd.to_datetime(combined['timestamp'])
 combined['sec_mod'] = combined['ts_dt'].dt.second % 10
 true_off = combined[(combined['trigger_type'] != 'scheduled') & (combined['sec_mod'] != 0)]
@@ -169,3 +198,5 @@ with open('round4/analysis_summary.json', 'w') as f:
         'off_grid_rows': int(len(true_off)),
         'trigger_dist': combined['trigger_type'].value_counts().to_dict()
     }, f, indent=2)
+
+print("\nDone!")
